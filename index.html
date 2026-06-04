@@ -425,6 +425,65 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
   background: linear-gradient(to right, #2196f3, #4caf50, #ffeb3b, #f44336);
   border-radius: 2px;
 }
+
+/* ── On This Day section ── */
+.otd-section { margin-top: 16px; }
+
+.otd-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+}
+
+.otd-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.otd-divider {
+  height: 1px;
+  background: rgba(255,255,255,0.06);
+  margin: 14px 0;
+}
+
+.otd-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+}
+
+.otd-value-lg {
+  font-family: 'DM Serif Display', serif;
+  font-size: 28px;
+  color: var(--text-primary);
+  line-height: 1.1;
+}
+.otd-value-lg.cold { color: #7eb8f7; }
+
+.otd-sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.otd-value-sm {
+  font-size: 20px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.otd-value-sm.cold { color: #7eb8f7; }
+
+.otd-skel-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.otd-skel-cell { display: flex; flex-direction: column; gap: 5px; }
+.skel-otd-lbl  { height: 10px; width: 65%; }
+.skel-otd-lg   { height: 30px; width: 55%; }
+.skel-otd-sub  { height: 10px; width: 45%; }
+.skel-otd-sm   { height: 22px; width: 50%; }
 </style>
 </head>
 <body>
@@ -492,11 +551,40 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
     <div class="hourly-scroll" id="hourlyScroll"></div>
   </div>
 
+  <div class="otd-section" id="otdSection">
+    <div class="map-label">On This Day</div>
+    <div class="otd-card" id="otdCard">
+      <div class="otd-skel-row">
+        <div class="otd-skel-cell">
+          <div class="skel-block skel-otd-lbl"></div>
+          <div class="skel-block skel-otd-lg"></div>
+          <div class="skel-block skel-otd-sub"></div>
+        </div>
+        <div class="otd-skel-cell">
+          <div class="skel-block skel-otd-lbl"></div>
+          <div class="skel-block skel-otd-lg"></div>
+          <div class="skel-block skel-otd-sub"></div>
+        </div>
+      </div>
+      <div class="otd-divider"></div>
+      <div class="otd-skel-row">
+        <div class="otd-skel-cell">
+          <div class="skel-block skel-otd-lbl"></div>
+          <div class="skel-block skel-otd-sm"></div>
+        </div>
+        <div class="otd-skel-cell">
+          <div class="skel-block skel-otd-lbl"></div>
+          <div class="skel-block skel-otd-sm"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="map-section">
     <div class="map-label">Radar &amp; Satellite</div>
     <div class="map-container">
       <div id="map"></div>
-      <div class="map-legend">
+      <div class="map-legend" id="mapLegend">
         <span>Low</span>
         <div class="map-legend-bar"></div>
         <span>High</span>
@@ -529,6 +617,7 @@ const FETCH_TIMEOUT  = 8000;
 const API_BASE       = 'https://api.open-meteo.com/v1/forecast';
 const GEO_BASE       = 'https://nominatim.openstreetmap.org/reverse';
 const RAINVIEWER_API = 'https://api.rainviewer.com/public/weather-maps.json';
+const HISTORY_API    = 'https://archive-api.open-meteo.com/v1/archive';
 const DAYS           = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
 const WMO = {
@@ -733,8 +822,8 @@ function initMap(lat, lon) {
   leafletMap = L.map('map', {
     center: [lat, lon],
     zoom: 9,
-    minZoom: 3,
-    maxZoom: 12,
+    minZoom: 4,
+    maxZoom: 10,
     dragging: true,
     touchZoom: true,
     scrollWheelZoom: true,
@@ -745,6 +834,8 @@ function initMap(lat, lon) {
     attributionControl: true,
   });
 
+  leafletMap.setMinZoom(4);
+  leafletMap.setMaxZoom(10);
   leafletMap.zoomControl.setPosition('bottomright');
 
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
@@ -761,33 +852,121 @@ function initMap(lat, lon) {
   setTimeout(() => leafletMap.invalidateSize(), 100);
 }
 
+// ── Toggle the radar legend between normal and no-data states ─────────────
+function setLegendState(hasData) {
+  const legend = document.getElementById('mapLegend');
+  if (!legend) return;
+  legend.innerHTML = hasData
+    ? '<span>Low</span><div class="map-legend-bar"></div><span>High</span>'
+    : '<span>No radar data</span>';
+}
+
 // ── Fetch latest RainViewer timestamps and update overlay tile layers ───────
 async function refreshRadarOverlay() {
   if (!leafletMap) return;
+  const OVERLAY_ZOOM = { minZoom: 4, maxZoom: 10, minNativeZoom: 4, maxNativeZoom: 10 };
   try {
     const data = await fetchWithTimeout(RAINVIEWER_API);
 
     if (infraredLayer) { leafletMap.removeLayer(infraredLayer); infraredLayer = null; }
     if (radarLayer)    { leafletMap.removeLayer(radarLayer);    radarLayer    = null; }
 
+    if (!data.radar?.past?.length) { setLegendState(false); return; }
+
     if (data.satellite?.infrared?.length) {
       const irTs = data.satellite.infrared[data.satellite.infrared.length - 1].time;
       infraredLayer = L.tileLayer(
         `https://tilecache.rainviewer.com/v2/satellite/infrared/${irTs}/256/{z}/{x}/{y}/0/0_0.png`,
-        { opacity: 0.35, tileSize: 256, minZoom: 0, maxZoom: 12, minNativeZoom: 0, maxNativeZoom: 12 }
+        { opacity: 0.35, tileSize: 256, ...OVERLAY_ZOOM }
       ).addTo(leafletMap);
     }
 
-    if (data.radar?.past?.length) {
-      const radarTs = data.radar.past[data.radar.past.length - 1].time;
-      radarLayer = L.tileLayer(
-        `https://tilecache.rainviewer.com/v2/radar/${radarTs}/256/{z}/{x}/{y}/2/1_1.png`,
-        { opacity: 0.6, tileSize: 256, minZoom: 0, maxZoom: 12, minNativeZoom: 0, maxNativeZoom: 12 }
-      ).addTo(leafletMap);
-    }
+    const radarTs = data.radar.past[data.radar.past.length - 1].time;
+    radarLayer = L.tileLayer(
+      `https://tilecache.rainviewer.com/v2/radar/${radarTs}/256/{z}/{x}/{y}/6/1_1.png`,
+      { opacity: 0.6, tileSize: 256, ...OVERLAY_ZOOM }
+    ).addTo(leafletMap);
+
+    radarLayer.on('tileload', function(e) {
+      const img = e.tile;
+      img.onload = function() { if (img.naturalWidth < 16) img.style.display = 'none'; };
+      img.onerror = function() { img.style.display = 'none'; };
+    });
+
+    setLegendState(true);
   } catch {
-    // Fail silently — map displays without overlay
+    if (infraredLayer) { leafletMap.removeLayer(infraredLayer); infraredLayer = null; }
+    if (radarLayer)    { leafletMap.removeLayer(radarLayer);    radarLayer    = null; }
+    setLegendState(false);
   }
+}
+
+// ── Fetch 40 years of historical daily data for today's calendar date ────────
+async function fetchHistorical(lat, lon) {
+  const now  = new Date();
+  const pad  = n => String(n).padStart(2, '0');
+  const year = now.getFullYear();
+  const mm   = pad(now.getMonth() + 1);
+  const dd   = pad(now.getDate());
+  const params = new URLSearchParams({
+    latitude:         lat,
+    longitude:        lon,
+    start_date:       `${year - 40}-01-01`,
+    end_date:         `${year}-${mm}-${dd}`,
+    daily:            'temperature_2m_max,temperature_2m_min',
+    temperature_unit: 'fahrenheit',
+    timezone:         'auto',
+  });
+  return fetchWithTimeout(`${HISTORY_API}?${params}`);
+}
+
+// ── Process historical data and render the On This Day card ──────────────────
+function renderHistorical(data) {
+  const section = document.getElementById('otdSection');
+  const card    = document.getElementById('otdCard');
+  const now     = new Date();
+  const targetMD = `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+  const entries = (data.daily?.time || [])
+    .map((d, i) => ({
+      year: d.slice(0, 4),
+      max:  data.daily.temperature_2m_max[i],
+      min:  data.daily.temperature_2m_min[i],
+      md:   d.slice(5),
+    }))
+    .filter(e => e.md === targetMD && e.max != null && e.min != null);
+
+  if (!entries.length) { section.style.display = 'none'; return; }
+
+  const recHigh = entries.reduce((a, b) => b.max > a.max ? b : a);
+  const recLow  = entries.reduce((a, b) => b.min < a.min ? b : a);
+  const avgHigh = Math.round(entries.reduce((s, e) => s + e.max, 0) / entries.length);
+  const avgLow  = Math.round(entries.reduce((s, e) => s + e.min, 0) / entries.length);
+
+  card.innerHTML = `
+    <div class="otd-grid">
+      <div>
+        <div class="otd-label">Record High</div>
+        <div class="otd-value-lg">${Math.round(recHigh.max)}°F</div>
+        <div class="otd-sub">set in ${recHigh.year}</div>
+      </div>
+      <div>
+        <div class="otd-label">Record Low</div>
+        <div class="otd-value-lg cold">${Math.round(recLow.min)}°F</div>
+        <div class="otd-sub">set in ${recLow.year}</div>
+      </div>
+    </div>
+    <div class="otd-divider"></div>
+    <div class="otd-grid">
+      <div>
+        <div class="otd-label">Avg High</div>
+        <div class="otd-value-sm">${avgHigh}°F</div>
+      </div>
+      <div>
+        <div class="otd-label">Avg Low</div>
+        <div class="otd-value-sm cold">${avgLow}°F</div>
+      </div>
+    </div>`;
 }
 
 // ── Render the forecast strip ──────────────────────────────────────────────
@@ -890,6 +1069,9 @@ async function loadWeather() {
       toggleDay(0);
       initMap(lat, lon);
       refreshRadarOverlay();
+      fetchHistorical(lat, lon)
+        .then(data => renderHistorical(data))
+        .catch(() => { document.getElementById('otdSection').style.display = 'none'; });
     } else {
       renderHourlyPanel(activeDayIndex);
     }
