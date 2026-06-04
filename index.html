@@ -216,6 +216,93 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
 .skel-pill  { height: 64px; border-radius: var(--radius); }
 .skel-strip { width: 100%; height: 90px; border-radius: var(--radius); }
 
+/* ── Hourly panel ── */
+.day-card { cursor: pointer; }
+
+.day-card.active {
+  border-left-color: var(--accent);
+  background: rgba(255,255,255,0.07);
+}
+
+.forecast-wrap.panel-open {
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.hourly-panel {
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 320ms cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 200ms ease 60ms;
+}
+.hourly-panel.open {
+  max-height: 160px;
+  opacity: 1;
+}
+
+.hourly-scroll {
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 6px 4px 8px;
+  gap: 2px;
+  border-top: 1px solid var(--border);
+}
+.hourly-scroll::-webkit-scrollbar { display: none; }
+
+.hour-card {
+  flex: 0 0 64px;
+  min-width: 64px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px 6px;
+  border-radius: 8px;
+  border-top: 2px solid transparent;
+}
+.hour-card.current-hour {
+  border-top-color: var(--accent);
+  background: rgba(255,255,255,0.04);
+}
+
+.hour-date {
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  line-height: 1;
+}
+
+.hour-time {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.hour-icon { color: var(--text-muted); }
+
+.hour-temp {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.hour-precip {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  color: #7eb8f7;
+}
+
 /* ── Error ── */
 .error-ui {
   display: none;
@@ -302,8 +389,11 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
     </div>
   </div>
 
-  <div class="forecast-wrap">
+  <div class="forecast-wrap" id="forecastWrap">
     <div class="forecast" id="forecast"></div>
+  </div>
+  <div class="hourly-panel" id="hourlyPanel">
+    <div class="hourly-scroll" id="hourlyScroll"></div>
   </div>
 </div>
 
@@ -316,6 +406,11 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
 </div>
 
 <script>
+// ── Module state ──────────────────────────────────────────────────────────
+let hourlyData    = null;
+let dailyDates    = [];
+let activeDayIndex = null;
+
 // ── Constants ──────────────────────────────────────────────────────────────
 const REFRESH_MS   = 10 * 60 * 1000;
 const FETCH_TIMEOUT = 8000;
@@ -427,16 +522,102 @@ async function fetchWeather(lat, lon) {
   return fetchWithTimeout(`${API_BASE}?${params}`);
 }
 
+// ── Fetch hourly weather data ──────────────────────────────────────────────
+async function fetchHourly(lat, lon) {
+  const params = new URLSearchParams({
+    latitude:  lat,
+    longitude: lon,
+    hourly:    'temperature_2m,weathercode,precipitation_probability,windspeed_10m,apparent_temperature',
+    timezone:  'auto',
+    forecast_days: 7,
+  });
+  return fetchWithTimeout(`${API_BASE}?${params}`);
+}
+
+// ── Format ISO timestamp to "9 AM" / "12 PM" ──────────────────────────────
+function formatHour(isoStr) {
+  const h = new Date(isoStr).getHours();
+  if (h === 0)  return '12 AM';
+  if (h < 12)   return `${h} AM`;
+  if (h === 12) return '12 PM';
+  return `${h - 12} PM`;
+}
+
+// ── Render hourly scroll content for a given day index ────────────────────
+function renderHourlyPanel(dayIndex) {
+  if (!hourlyData || dayIndex === null) return;
+  const scroll    = document.getElementById('hourlyScroll');
+  const targetDate = dailyDates[dayIndex];
+  const now        = new Date();
+  const currentH   = now.getHours();
+  const isToday    = dayIndex === 0;
+
+  const allHours = hourlyData.time
+    .map((t, i) => ({ t, i }))
+    .filter(({ t }) => t.startsWith(targetDate));
+
+  const hours = isToday && currentH < 22
+    ? allHours.filter(({ t }) => new Date(t).getHours() >= currentH)
+    : allHours;
+
+  scroll.innerHTML = hours.map(({ t, i }) => {
+    const d          = new Date(t);
+    const h          = d.getHours();
+    const isCurrent  = isToday && h === currentH;
+    const precipProb = hourlyData.precipitation_probability[i];
+    const showPrecip = precipProb != null && precipProb >= 10;
+    const wInfo      = wmoInfo(hourlyData.weathercode[i]);
+    const isDayHour  = h >= 6 && h < 20;
+
+    const dateLabelHtml = h === 0
+      ? `<span class="hour-date">${DAYS[d.getDay()]}</span>`
+      : '';
+
+    const precipHtml = showPrecip
+      ? `<span class="hour-precip"><svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg>${precipProb}%</span>`
+      : '';
+
+    return `<div class="hour-card${isCurrent ? ' current-hour' : ''}">
+        ${dateLabelHtml}
+        <span class="hour-time">${formatHour(t)}</span>
+        <div class="hour-icon">${icon(wInfo.g, isDayHour, 20)}</div>
+        <span class="hour-temp">${Math.round(hourlyData.temperature_2m[i])}°</span>
+        ${precipHtml}
+      </div>`;
+  }).join('');
+}
+
+// ── Toggle hourly panel open/closed for a clicked day index ───────────────
+function toggleDay(dayIndex) {
+  const panel      = document.getElementById('hourlyPanel');
+  const forecastWrap = document.getElementById('forecastWrap');
+  const cards      = document.querySelectorAll('.day-card');
+
+  if (activeDayIndex === dayIndex) {
+    activeDayIndex = null;
+    panel.classList.remove('open');
+    forecastWrap.classList.remove('panel-open');
+    cards.forEach(c => c.classList.remove('active'));
+  } else {
+    activeDayIndex = dayIndex;
+    cards.forEach((c, i) => c.classList.toggle('active', i === dayIndex));
+    renderHourlyPanel(dayIndex);
+    panel.classList.add('open');
+    forecastWrap.classList.add('panel-open');
+  }
+}
+
 // ── Render the forecast strip ──────────────────────────────────────────────
 function renderForecast(daily) {
+  dailyDates = daily.time;
   const strip  = document.getElementById('forecast');
-  const today  = new Date().getDay();
   strip.innerHTML = daily.time.map((dateStr, i) => {
-    const d     = new Date(dateStr + 'T12:00:00');
-    const wInfo = wmoInfo(daily.weathercode[i]);
-    const isToday = i === 0;
+    const d        = new Date(dateStr + 'T12:00:00');
+    const wInfo    = wmoInfo(daily.weathercode[i]);
+    const isToday  = i === 0;
+    const isActive = i === activeDayIndex;
     return `
-      <div class="day-card${isToday ? ' today' : ''}">
+      <div class="day-card${isToday ? ' today' : ''}${isActive ? ' active' : ''}" data-day-index="${i}">
         <span class="day-label">${isToday ? 'Today' : DAYS[d.getDay()]}</span>
         <div class="day-icon">${icon(wInfo.g, true, 20)}</div>
         <div class="day-temps">
@@ -494,6 +675,7 @@ function showCard() {
 
 // ── Main data load routine ─────────────────────────────────────────────────
 async function loadWeather() {
+  const isFirstLoad = activeDayIndex === null;
   document.getElementById('errorUi').classList.remove('active');
   document.getElementById('skeleton').classList.add('active');
   document.getElementById('card').classList.remove('visible');
@@ -513,11 +695,18 @@ async function loadWeather() {
   }
 
   try {
-    const [weather, city] = await Promise.all([
+    const [weather, hourly, city] = await Promise.all([
       fetchWeather(lat, lon),
+      fetchHourly(lat, lon),
       reverseGeocode(lat, lon),
     ]);
+    hourlyData = hourly.hourly;
     renderWeather(weather, city);
+    if (isFirstLoad) {
+      toggleDay(0);
+    } else {
+      renderHourlyPanel(activeDayIndex);
+    }
     showCard();
   } catch (err) {
     if (err.name === 'AbortError') {
@@ -530,6 +719,14 @@ async function loadWeather() {
 
 // ── Boot ───────────────────────────────────────────────────────────────────
 document.getElementById('retryBtn').addEventListener('click', loadWeather);
+
+document.getElementById('forecast').addEventListener('click', e => {
+  const card = e.target.closest('.day-card');
+  if (!card) return;
+  const idx = parseInt(card.dataset.dayIndex, 10);
+  if (!isNaN(idx)) toggleDay(idx);
+});
+
 loadWeather();
 setInterval(loadWeather, REFRESH_MS);
 </script>
