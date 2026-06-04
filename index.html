@@ -243,7 +243,7 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
               opacity 200ms ease 60ms;
 }
 .hourly-panel.open {
-  max-height: 160px;
+  max-height: 200px;
   opacity: 1;
 }
 
@@ -254,8 +254,19 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
   padding: 6px 4px 8px;
   gap: 2px;
   border-top: 1px solid var(--border);
+  position: relative;
 }
 .hourly-scroll::-webkit-scrollbar { display: none; }
+.hourly-panel.open .hourly-scroll::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 100%;
+  width: 32px;
+  pointer-events: none;
+  background: linear-gradient(to right, transparent, #161a1f);
+}
 
 .hour-card {
   flex: 0 0 64px;
@@ -647,7 +658,7 @@ function renderHourlyPanel(dayIndex) {
     .map((t, i) => ({ t, i }))
     .filter(({ t }) => t.startsWith(targetDate));
 
-  const hours = isToday && currentH < 22
+  const hours = isToday
     ? allHours.filter(({ t }) => new Date(t).getHours() >= currentH)
     : allHours;
 
