@@ -733,6 +733,8 @@ function initMap(lat, lon) {
   leafletMap = L.map('map', {
     center: [lat, lon],
     zoom: 9,
+    minZoom: 3,
+    maxZoom: 12,
     dragging: true,
     touchZoom: true,
     scrollWheelZoom: true,
@@ -772,7 +774,7 @@ async function refreshRadarOverlay() {
       const irTs = data.satellite.infrared[data.satellite.infrared.length - 1].time;
       infraredLayer = L.tileLayer(
         `https://tilecache.rainviewer.com/v2/satellite/infrared/${irTs}/256/{z}/{x}/{y}/0/0_0.png`,
-        { opacity: 0.35, tileSize: 256 }
+        { opacity: 0.35, tileSize: 256, minZoom: 0, maxZoom: 12, minNativeZoom: 0, maxNativeZoom: 12 }
       ).addTo(leafletMap);
     }
 
@@ -780,7 +782,7 @@ async function refreshRadarOverlay() {
       const radarTs = data.radar.past[data.radar.past.length - 1].time;
       radarLayer = L.tileLayer(
         `https://tilecache.rainviewer.com/v2/radar/${radarTs}/256/{z}/{x}/{y}/2/1_1.png`,
-        { opacity: 0.6, tileSize: 256 }
+        { opacity: 0.6, tileSize: 256, minZoom: 0, maxZoom: 12, minNativeZoom: 0, maxNativeZoom: 12 }
       ).addTo(leafletMap);
     }
   } catch {
