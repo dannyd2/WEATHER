@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weather</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0d0f12;
+  --surface: #161a1f;
+  --border: rgba(255,255,255,0.06);
+  --text-primary: #f0ede8;
+  --text-muted: #6b7280;
+  --accent: #f5a623;
+  --radius: 12px;
+  --transition: 150ms ease;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: 'DM Sans', sans-serif;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  transition: background 0.4s ease;
+}
+
+body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
+
+.card {
+  width: 100%;
+  max-width: 420px;
+  opacity: 0;
+  transition: opacity 600ms ease 200ms;
+}
+.card.visible { opacity: 1; }
+
+/* ── Top zone ── */
+.location {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.temp-display {
+  font-family: 'DM Serif Display', serif;
+  font-size: clamp(100px, 18vw, 160px);
+  line-height: 0.9;
+  letter-spacing: -0.02em;
+  text-align: center;
+  color: var(--text-primary);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+}
+
+.temp-value { display: inline-block; }
+
+.temp-unit {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 28px;
+  font-weight: 300;
+  color: var(--accent);
+  margin-top: 20px;
+}
+
+.description {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 12px;
+  margin-bottom: 28px;
+  min-height: 22px;
+}
+
+/* ── Stat pills ── */
+.stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.pill {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: transform var(--transition);
+  cursor: default;
+}
+.pill:hover { transform: scale(1.02); }
+
+.pill-icon { color: var(--text-muted); flex-shrink: 0; }
+
+.pill-text { display: flex; flex-direction: column; gap: 2px; }
+
+.pill-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.pill-value {
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--text-primary);
+}
+
+/* ── Forecast strip ── */
+.forecast-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-top: 4px;
+}
+
+.forecast {
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 4px;
+  gap: 4px;
+}
+.forecast::-webkit-scrollbar { display: none; }
+
+.day-card {
+  flex: 0 0 calc((100% - 32px) / 7);
+  min-width: 50px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 6px;
+  border-radius: 8px;
+  transition: transform var(--transition);
+  cursor: default;
+  border-left: 3px solid transparent;
+}
+.day-card:hover { transform: translateY(-2px); }
+.day-card.today {
+  border-left-color: var(--accent);
+  background: rgba(255,255,255,0.04);
+}
+
+.day-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.day-icon { color: var(--text-muted); }
+
+.day-temps {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.day-high { font-size: 13px; font-weight: 500; color: var(--text-primary); }
+.day-low  { font-size: 11px; font-weight: 400; color: var(--text-muted); }
+
+/* ── Skeleton ── */
+.skeleton { display: none; }
+.skeleton.active { display: block; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; }
+  50%       { opacity: 0.6; }
+}
+
+.skel-block {
+  background: var(--surface);
+  border-radius: 6px;
+  animation: pulse 1.6s ease infinite;
+}
+
+.skeleton-ui {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.skel-loc   { width: 120px; height: 12px; }
+.skel-temp  { width: 200px; height: 120px; border-radius: 8px; }
+.skel-desc  { width: 140px; height: 16px; }
+.skel-grid  { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; width: 100%; }
+.skel-pill  { height: 64px; border-radius: var(--radius); }
+.skel-strip { width: 100%; height: 90px; border-radius: var(--radius); }
+
+/* ── Error ── */
+.error-ui {
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  max-width: 320px;
+}
+.error-ui.active { display: flex; }
+.error-icon { color: var(--text-muted); }
+.error-title { font-size: 18px; font-weight: 500; color: var(--text-primary); }
+.error-msg { font-size: 14px; color: var(--text-muted); line-height: 1.5; }
+.error-retry {
+  margin-top: 8px;
+  padding: 10px 24px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
+  border-radius: 8px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color var(--transition);
+}
+.error-retry:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- Skeleton loader -->
+<div class="skeleton active" id="skeleton">
+  <div class="skeleton-ui">
+    <div class="skel-block skel-loc"></div>
+    <div class="skel-block skel-temp"></div>
+    <div class="skel-block skel-desc"></div>
+    <div class="skel-grid">
+      <div class="skel-block skel-pill"></div>
+      <div class="skel-block skel-pill"></div>
+      <div class="skel-block skel-pill"></div>
+      <div class="skel-block skel-pill"></div>
+    </div>
+    <div class="skel-block skel-strip"></div>
+  </div>
+</div>
+
+<!-- Main card -->
+<div class="card" id="card">
+  <div class="location" id="location">—</div>
+  <div class="temp-display">
+    <span class="temp-value" id="temp">—</span>
+    <span class="temp-unit">°C</span>
+  </div>
+  <div class="description" id="description">Loading…</div>
+
+  <div class="stats">
+    <div class="pill">
+      <div class="pill-icon"><?xml version="1.0"?><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg></div>
+      <div class="pill-text">
+        <span class="pill-label">Feels Like</span>
+        <span class="pill-value" id="feels">—</span>
+      </div>
+    </div>
+    <div class="pill">
+      <div class="pill-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/></svg></div>
+      <div class="pill-text">
+        <span class="pill-label">Humidity</span>
+        <span class="pill-value" id="humidity">—</span>
+      </div>
+    </div>
+    <div class="pill">
+      <div class="pill-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"/></svg></div>
+      <div class="pill-text">
+        <span class="pill-label">Wind</span>
+        <span class="pill-value" id="wind">—</span>
+      </div>
+    </div>
+    <div class="pill">
+      <div class="pill-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="19" x2="8" y2="21"/><line x1="8" y1="13" x2="8" y2="15"/><line x1="16" y1="19" x2="16" y2="21"/><line x1="16" y1="13" x2="16" y2="15"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="12" y1="15" x2="12" y2="17"/><path d="M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/></svg></div>
+      <div class="pill-text">
+        <span class="pill-label">Precipitation</span>
+        <span class="pill-value" id="precip">—</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="forecast-wrap">
+    <div class="forecast" id="forecast"></div>
+  </div>
+</div>
+
+<!-- Error state -->
+<div class="error-ui" id="errorUi">
+  <div class="error-icon"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg></div>
+  <div class="error-title" id="errorTitle">Something went wrong</div>
+  <div class="error-msg" id="errorMsg">Unable to load weather data.</div>
+  <button class="error-retry" id="retryBtn">Try again</button>
+</div>
+
+<script>
+// ── Constants ──────────────────────────────────────────────────────────────
+const REFRESH_MS   = 10 * 60 * 1000;
+const FETCH_TIMEOUT = 8000;
+const API_BASE     = 'https://api.open-meteo.com/v1/forecast';
+const GEO_BASE     = 'https://nominatim.openstreetmap.org/reverse';
+const DAYS         = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+const WMO = {
+  0:  { d: 'Clear sky',          g: 'clear'       },
+  1:  { d: 'Mainly clear',       g: 'partly'      },
+  2:  { d: 'Partly cloudy',      g: 'partly'      },
+  3:  { d: 'Overcast',           g: 'overcast'    },
+  45: { d: 'Foggy',              g: 'fog'         },
+  48: { d: 'Depositing rime fog',g: 'fog'         },
+  51: { d: 'Light drizzle',      g: 'drizzle'     },
+  53: { d: 'Moderate drizzle',   g: 'drizzle'     },
+  55: { d: 'Dense drizzle',      g: 'drizzle'     },
+  56: { d: 'Freezing drizzle',   g: 'drizzle'     },
+  57: { d: 'Heavy freezing drizzle', g: 'drizzle' },
+  61: { d: 'Slight rain',        g: 'rain'        },
+  63: { d: 'Moderate rain',      g: 'rain'        },
+  65: { d: 'Heavy rain',         g: 'rain'        },
+  66: { d: 'Freezing rain',      g: 'rain'        },
+  67: { d: 'Heavy freezing rain',g: 'rain'        },
+  71: { d: 'Slight snow',        g: 'snow'        },
+  73: { d: 'Moderate snow',      g: 'snow'        },
+  75: { d: 'Heavy snow',         g: 'snow'        },
+  77: { d: 'Snow grains',        g: 'snow'        },
+  80: { d: 'Slight rain showers',g: 'rain'        },
+  81: { d: 'Moderate rain showers', g: 'rain'     },
+  82: { d: 'Violent rain showers', g: 'rain'      },
+  85: { d: 'Slight snow showers',g: 'snow'        },
+  86: { d: 'Heavy snow showers', g: 'snow'        },
+  95: { d: 'Thunderstorm',       g: 'thunder'     },
+  96: { d: 'Thunderstorm w/ hail', g: 'thunder'   },
+  99: { d: 'Thunderstorm w/ heavy hail', g: 'thunder' },
+};
+
+// ── SVG icons (24×24 stroke, returns HTML string) ─────────────────────────
+function icon(group, isDay = true, size = 24) {
+  const s = `width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"`;
+  const icons = {
+    clear_day:   `<svg ${s}><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>`,
+    clear_night: `<svg ${s}><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>`,
+    partly:      `<svg ${s}><circle cx="9" cy="10" r="4"/><line x1="9" y1="3" x2="9" y2="5"/><line x1="3" y1="10" x2="5" y2="10"/><line x1="14.66" y1="5.34" x2="13.24" y2="6.76"/><path d="M14 16H7a4 4 0 0 1 0-8 4.05 4.05 0 0 1 .54.04A5.5 5.5 0 1 1 14 16z"/></svg>`,
+    overcast:    `<svg ${s}><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>`,
+    fog:         `<svg ${s}><line x1="3" y1="8" x2="21" y2="8"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="16" x2="21" y2="16"/></svg>`,
+    drizzle:     `<svg ${s}><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/><line x1="8" y1="22" x2="10" y2="18"/><line x1="14" y1="22" x2="16" y2="18"/></svg>`,
+    rain:        `<svg ${s}><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/><line x1="7" y1="22" x2="9" y2="18"/><line x1="12" y1="22" x2="14" y2="18"/><line x1="17" y1="22" x2="19" y2="18"/></svg>`,
+    snow:        `<svg ${s}><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/><line x1="8" y1="22" x2="8" y2="18"/><line x1="8" y1="20" x2="6" y2="20"/><line x1="8" y1="20" x2="10" y2="20"/><line x1="14" y1="22" x2="14" y2="18"/><line x1="14" y1="20" x2="12" y2="20"/><line x1="14" y1="20" x2="16" y2="20"/></svg>`,
+    thunder:     `<svg ${s}><path d="M19 16.9A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/><polyline points="13 11 9 17 15 17 11 23"/></svg>`,
+  };
+  if (group === 'clear') return isDay ? icons.clear_day : icons.clear_night;
+  return icons[group] || icons.overcast;
+}
+
+// ── Fetch with timeout via AbortController ─────────────────────────────────
+async function fetchWithTimeout(url) {
+  const ctrl = new AbortController();
+  const tid  = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(tid);
+  }
+}
+
+// ── Resolve WMO code to label ──────────────────────────────────────────────
+function wmoInfo(code) {
+  return WMO[code] || WMO[Math.floor(code / 10) * 10] || { d: 'Unknown', g: 'overcast' };
+}
+
+// ── Get user geolocation ───────────────────────────────────────────────────
+function getPosition() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('DENIED'));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(resolve, err => {
+      reject(new Error(err.code === 1 ? 'DENIED' : 'GEO_ERR'));
+    }, { timeout: 10000 });
+  });
+}
+
+// ── Reverse geocode lat/lon to city name ──────────────────────────────────
+async function reverseGeocode(lat, lon) {
+  try {
+    const data = await fetchWithTimeout(`${GEO_BASE}?lat=${lat}&lon=${lon}&format=json`);
+    const a = data.address || {};
+    return a.city || a.town || a.village || a.county || a.state || 'Unknown location';
+  } catch {
+    return 'Unknown location';
+  }
+}
+
+// ── Fetch weather from Open-Meteo ─────────────────────────────────────────
+async function fetchWeather(lat, lon) {
+  const params = new URLSearchParams({
+    latitude:  lat,
+    longitude: lon,
+    current:   'temperature_2m,apparent_temperature,precipitation,weathercode,windspeed_10m,relativehumidity_2m,is_day',
+    daily:     'weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max',
+    timezone:  'auto',
+    forecast_days: 7,
+  });
+  return fetchWithTimeout(`${API_BASE}?${params}`);
+}
+
+// ── Render the forecast strip ──────────────────────────────────────────────
+function renderForecast(daily) {
+  const strip  = document.getElementById('forecast');
+  const today  = new Date().getDay();
+  strip.innerHTML = daily.time.map((dateStr, i) => {
+    const d     = new Date(dateStr + 'T12:00:00');
+    const wInfo = wmoInfo(daily.weathercode[i]);
+    const isToday = i === 0;
+    return `
+      <div class="day-card${isToday ? ' today' : ''}">
+        <span class="day-label">${isToday ? 'Today' : DAYS[d.getDay()]}</span>
+        <div class="day-icon">${icon(wInfo.g, true, 20)}</div>
+        <div class="day-temps">
+          <span class="day-high">${Math.round(daily.temperature_2m_max[i])}°</span>
+          <span class="day-low">${Math.round(daily.temperature_2m_min[i])}°</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ── Apply day/night body class ─────────────────────────────────────────────
+function applyDayNight(isDay) {
+  document.body.classList.toggle('night', !isDay);
+}
+
+// ── Populate UI with weather data ──────────────────────────────────────────
+function renderWeather(data, city) {
+  const c = data.current;
+  const isDay = c.is_day === 1;
+  const wInfo = wmoInfo(c.weathercode);
+
+  applyDayNight(isDay);
+
+  document.getElementById('location').textContent    = city.toUpperCase();
+  document.getElementById('temp').textContent        = Math.round(c.temperature_2m);
+  document.getElementById('description').textContent = wInfo.d;
+  document.getElementById('feels').textContent       = `${Math.round(c.apparent_temperature)}°C`;
+  document.getElementById('humidity').textContent    = `${c.relativehumidity_2m}%`;
+  document.getElementById('wind').textContent        = `${Math.round(c.windspeed_10m)} km/h`;
+
+  const precip = data.daily.precipitation_probability_max[0];
+  document.getElementById('precip').textContent = precip != null ? `${precip}%` : `${c.precipitation} mm`;
+
+  renderForecast(data.daily);
+}
+
+// ── Show error state ───────────────────────────────────────────────────────
+function showError(title, msg) {
+  document.getElementById('skeleton').classList.remove('active');
+  document.getElementById('card').classList.remove('visible');
+  const ui = document.getElementById('errorUi');
+  document.getElementById('errorTitle').textContent = title;
+  document.getElementById('errorMsg').textContent   = msg;
+  ui.classList.add('active');
+}
+
+// ── Hide error, show card ──────────────────────────────────────────────────
+function showCard() {
+  document.getElementById('errorUi').classList.remove('active');
+  document.getElementById('skeleton').classList.remove('active');
+  requestAnimationFrame(() => {
+    document.getElementById('card').classList.add('visible');
+  });
+}
+
+// ── Main data load routine ─────────────────────────────────────────────────
+async function loadWeather() {
+  document.getElementById('errorUi').classList.remove('active');
+  document.getElementById('skeleton').classList.add('active');
+  document.getElementById('card').classList.remove('visible');
+
+  let lat, lon;
+  try {
+    const pos = await getPosition();
+    lat = pos.coords.latitude;
+    lon = pos.coords.longitude;
+  } catch (err) {
+    if (err.message === 'DENIED') {
+      showError('Location access denied', 'Enable location permission in your browser settings, then try again.');
+    } else {
+      showError('Location unavailable', 'Could not determine your location. Please check your device settings.');
+    }
+    return;
+  }
+
+  try {
+    const [weather, city] = await Promise.all([
+      fetchWeather(lat, lon),
+      reverseGeocode(lat, lon),
+    ]);
+    renderWeather(weather, city);
+    showCard();
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      showError('Request timed out', 'The weather service took too long to respond. Check your connection and try again.');
+    } else {
+      showError('Couldn\'t load weather', 'There was a problem fetching data. Please check your internet connection.');
+    }
+  }
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+document.getElementById('retryBtn').addEventListener('click', loadWeather);
+loadWeather();
+setInterval(loadWeather, REFRESH_MS);
+</script>
+</body>
+</html>
