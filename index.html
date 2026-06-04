@@ -581,7 +581,7 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
   </div>
 
   <div class="map-section">
-    <div class="map-label">Radar &amp; Satellite</div>
+    <div class="map-label">Forecast Map</div>
     <div class="map-container">
       <div id="map"></div>
       <div class="map-legend" id="mapLegend">
@@ -609,6 +609,9 @@ let activeDayIndex = null;
 let leafletMap     = null;
 let radarLayer     = null;
 let infraredLayer  = null;
+let locationCircle = null;
+let userLat        = null;
+let userLon        = null;
 
 // ── Constants ──────────────────────────────────────────────────────────────
 const REFRESH_MS    = 10 * 60 * 1000;
@@ -837,6 +840,8 @@ function initMap(lat, lon) {
   leafletMap.setMinZoom(4);
   leafletMap.setMaxZoom(10);
   leafletMap.zoomControl.setPosition('bottomright');
+  userLat = lat;
+  userLon = lon;
 
   L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
@@ -852,52 +857,61 @@ function initMap(lat, lon) {
   setTimeout(() => leafletMap.invalidateSize(), 100);
 }
 
-// ── Toggle the radar legend between normal and no-data states ─────────────
-function setLegendState(hasData) {
+// ── Update the legend pill content ────────────────────────────────────────
+function setLegendState(hasRadar) {
   const legend = document.getElementById('mapLegend');
   if (!legend) return;
-  legend.innerHTML = hasData
+  legend.innerHTML = hasRadar
     ? '<span>Low</span><div class="map-legend-bar"></div><span>High</span>'
-    : '<span>No radar data</span>';
+    : '<span>Local Area Map</span>';
 }
 
-// ── Fetch latest RainViewer timestamps and update overlay tile layers ───────
+// ── Show a muted 50 km proximity circle when radar is unavailable ──────────
+function showLocationCircle() {
+  if (locationCircle || !leafletMap || !userLat) return;
+  locationCircle = L.circle([userLat, userLon], {
+    radius: 50000,
+    color: '#f5a623',
+    fillColor: '#f5a623',
+    fillOpacity: 0.04,
+    weight: 1,
+    opacity: 0.3,
+  }).addTo(leafletMap);
+  setLegendState(false);
+}
+
+// ── Fetch latest radar snapshot and add as a single image overlay ──────────
+// Uses L.imageOverlay so no per-tile requests are ever made — eliminates
+// the "Zoom Level Not Supported" tile error at its source.
 async function refreshRadarOverlay() {
   if (!leafletMap) return;
-  const OVERLAY_ZOOM = { minZoom: 4, maxZoom: 10, minNativeZoom: 4, maxNativeZoom: 10 };
   try {
     const data = await fetchWithTimeout(RAINVIEWER_API);
+    if (!data.radar?.past?.length) { showLocationCircle(); return; }
 
-    if (infraredLayer) { leafletMap.removeLayer(infraredLayer); infraredLayer = null; }
-    if (radarLayer)    { leafletMap.removeLayer(radarLayer);    radarLayer    = null; }
+    const ts  = data.radar.past[data.radar.past.length - 1].time;
+    const url = `https://tilecache.rainviewer.com/v2/radar/${ts}/512/full/6/1_1.png`;
 
-    if (!data.radar?.past?.length) { setLegendState(false); return; }
+    if (radarLayer) { leafletMap.removeLayer(radarLayer); radarLayer = null; }
 
-    if (data.satellite?.infrared?.length) {
-      const irTs = data.satellite.infrared[data.satellite.infrared.length - 1].time;
-      infraredLayer = L.tileLayer(
-        `https://tilecache.rainviewer.com/v2/satellite/infrared/${irTs}/256/{z}/{x}/{y}/0/0_0.png`,
-        { opacity: 0.35, tileSize: 256, ...OVERLAY_ZOOM }
-      ).addTo(leafletMap);
-    }
+    const overlay = L.imageOverlay(url, [[-85, -180], [85, 180]], { opacity: 0.55 });
 
-    const radarTs = data.radar.past[data.radar.past.length - 1].time;
-    radarLayer = L.tileLayer(
-      `https://tilecache.rainviewer.com/v2/radar/${radarTs}/256/{z}/{x}/{y}/6/1_1.png`,
-      { opacity: 0.6, tileSize: 256, ...OVERLAY_ZOOM }
-    ).addTo(leafletMap);
-
-    radarLayer.on('tileload', function(e) {
-      const img = e.tile;
-      img.onload = function() { if (img.naturalWidth < 16) img.style.display = 'none'; };
-      img.onerror = function() { img.style.display = 'none'; };
+    overlay.on('error', function() {
+      leafletMap.removeLayer(overlay);
+      radarLayer = null;
+      showLocationCircle();
     });
 
-    setLegendState(true);
+    overlay.on('load', function() {
+      if (locationCircle) { leafletMap.removeLayer(locationCircle); locationCircle = null; }
+      setLegendState(true);
+    });
+
+    radarLayer = overlay;
+    overlay.addTo(leafletMap);
   } catch {
-    if (infraredLayer) { leafletMap.removeLayer(infraredLayer); infraredLayer = null; }
-    if (radarLayer)    { leafletMap.removeLayer(radarLayer);    radarLayer    = null; }
-    setLegendState(false);
+    if (radarLayer) { leafletMap.removeLayer(radarLayer); radarLayer = null; }
+    showLocationCircle();
   }
 }
 
