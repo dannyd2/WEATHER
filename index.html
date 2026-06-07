@@ -1168,11 +1168,43 @@ function probeTileTemplate(tmpl) {
   });
 }
 
-// ── Probe IEM formats in priority order; return a working frame strategy ──
+// ── Fetch RainViewer's public API to get actual distinct radar timestamps ──
+// api.rainviewer.com is CORS-enabled; each past[] entry has a unique Unix
+// timestamp → genuinely different tile content per frame → real animation.
+async function fetchRainViewerStrategy() {
+  try {
+    const resp  = await fetchWithTimeout('https://api.rainviewer.com/public/weather-maps.json');
+    const data  = await resp.json();
+    const host   = data.host;
+    const frames = (data.radar?.past || []).slice(-RADAR_FRAMES);
+    if (!frames.length) return null;
+    const latest = frames[frames.length - 1];
+    const tmpl   = `${host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`;
+    if (!(await probeTileTemplate(tmpl))) return null;
+    return {
+      urlAt:  k => {
+        const f = frames[frames.length - 1 - k];
+        return f ? `${host}${f.path}/256/{z}/{x}/{y}/2/1_1.png` : tmpl;
+      },
+      timeAt: k => {
+        const f = frames[frames.length - 1 - k];
+        return new Date(((f ?? latest).time) * 1000);
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ── Probe source formats in priority order; return a working frame strategy ─
 // Each strategy yields a tile-URL template + display time for frame i
 // (i = 0 newest … RADAR_FRAMES-1 oldest). Returns null if none work.
 async function selectRadarStrategy() {
-  const base  = floorTo5(new Date());
+  // 0) RainViewer — real distinct timestamps, definitive per-frame movement.
+  const rv = await fetchRainViewerStrategy();
+  if (rv) return rv;
+
+  const base   = floorTo5(new Date());
   const timeAt = i => new Date(base.getTime() - i * RADAR_STEP_MS);
 
   // 1) Timestamped national composite. Step back a few frames to clear the
@@ -1301,16 +1333,7 @@ function degradeToLiveRadar() {
 // ── Probe + build the loop, or degrade to the live tile ───────────────────
 async function initRadarLoop() {
   const strat = await selectRadarStrategy();
-  if (!strat) {
-    console.info('[radar] no time-stepped product available — falling back to live composite:',
-      RADAR_LIVE_URL);
-    degradeToLiveRadar();
-    return;
-  }
-  // Diagnostic: log the resolved frame-0 tile URL so it can be tested directly.
-  const { x, y } = lonLatToTileXY(userLon, userLat, 7);
-  console.info('[radar] animated loop active — frame-0 tile:',
-    strat.urlAt(0).replace('{z}', 7).replace('{x}', x).replace('{y}', y));
+  if (!strat) { degradeToLiveRadar(); return; }
   radarFrames   = buildFrames(strat);
   radarFrameIdx = radarFrames.length - 1;
   radarLayer    = radarFrames[radarFrameIdx].layer.addTo(leafletMap);
