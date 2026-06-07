@@ -420,9 +420,9 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
 }
 
 .map-legend-bar {
-  width: 48px;
+  width: 52px;
   height: 4px;
-  background: linear-gradient(to right, #2196f3, #4caf50, #ffeb3b, #f44336);
+  background: linear-gradient(to right, #00d000, #ffff00, #ff8800, #ff0000, #cc00cc);
   border-radius: 2px;
 }
 
@@ -585,9 +585,9 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
     <div class="map-container">
       <div id="map"></div>
       <div class="map-legend" id="mapLegend">
-        <span>Low</span>
+        <span>Light</span>
         <div class="map-legend-bar"></div>
-        <span>High</span>
+        <span>Heavy</span>
       </div>
     </div>
   </div>
@@ -849,6 +849,8 @@ function initMap(lat, lon) {
     maxZoom: 19,
   }).addTo(leafletMap);
 
+  leafletMap.getPane('overlayPane').style.filter = 'saturate(2) contrast(1.3) brightness(1.1)';
+
   const markerHtml = '<div style="width:12px;height:12px;border-radius:50%;background:var(--accent);border:2px solid white;animation:marker-pulse 2s ease infinite;"></div>';
   L.marker([lat, lon], {
     icon: L.divIcon({ html: markerHtml, className: '', iconSize: [12, 12], iconAnchor: [6, 6] }),
@@ -862,7 +864,7 @@ function setLegendState(hasRadar) {
   const legend = document.getElementById('mapLegend');
   if (!legend) return;
   legend.innerHTML = hasRadar
-    ? '<span>Low</span><div class="map-legend-bar"></div><span>High</span>'
+    ? '<span>Light</span><div class="map-legend-bar"></div><span>Heavy</span>'
     : '<span>Local Area Map</span>';
 }
 
@@ -880,39 +882,70 @@ function showLocationCircle() {
   setLegendState(false);
 }
 
-// ── Fetch latest radar snapshot and add as a single image overlay ──────────
-// Uses L.imageOverlay so no per-tile requests are ever made — eliminates
-// the "Zoom Level Not Supported" tile error at its source.
+// ── Extract a valid radar tile URL from the RainViewer JSON response ────────
+// Handles Shape A (.time), Shape B (.path fragment), Shape C (.generated).
+function buildRadarTileUrl(data) {
+  const host = (data.host || 'https://tilecache.rainviewer.com').replace(/\/$/, '');
+  const past = data.radar?.past;
+  if (!past?.length) return null;
+  const last = past[past.length - 1];
+  if (typeof last.path === 'string' && last.path) {
+    return `${host}${last.path}/256/{z}/{x}/{y}/4/1_1.png`;
+  }
+  if (typeof last.time === 'number' && last.time) {
+    return `${host}/v2/radar/${last.time}/256/{z}/{x}/{y}/4/1_1.png`;
+  }
+  if (typeof data.generated === 'number' && data.generated) {
+    return `${host}/v2/radar/${data.generated}/256/{z}/{x}/{y}/4/1_1.png`;
+  }
+  return null;
+}
+
+// ── Refresh radar tile layer from RainViewer, with NWS mosaic fallback ─────
 async function refreshRadarOverlay() {
   if (!leafletMap) return;
+
+  if (radarLayer)    { leafletMap.removeLayer(radarLayer);    radarLayer    = null; }
+  if (infraredLayer) { leafletMap.removeLayer(infraredLayer); infraredLayer = null; }
+
+  const TILE_OPTS = { opacity: 0.85, zIndex: 500, minZoom: 3, maxZoom: 10,
+                      minNativeZoom: 3, maxNativeZoom: 10 };
+
+  // ── Attempt 1: RainViewer tileLayer ────────────────────────────────────
+  let tileUrl = null;
   try {
     const data = await fetchWithTimeout(RAINVIEWER_API);
-    if (!data.radar?.past?.length) { showLocationCircle(); return; }
+    tileUrl = buildRadarTileUrl(data);
+  } catch { /* fall through to fallback */ }
 
-    const ts  = data.radar.past[data.radar.past.length - 1].time;
-    const url = `https://tilecache.rainviewer.com/v2/radar/${ts}/512/full/6/1_1.png`;
-
-    if (radarLayer) { leafletMap.removeLayer(radarLayer); radarLayer = null; }
-
-    const overlay = L.imageOverlay(url, [[-85, -180], [85, 180]], { opacity: 0.55 });
-
-    overlay.on('error', function() {
-      leafletMap.removeLayer(overlay);
-      radarLayer = null;
-      showLocationCircle();
+  if (tileUrl) {
+    radarLayer = L.tileLayer(tileUrl, TILE_OPTS).addTo(leafletMap);
+    radarLayer.on('tileerror', function(e) {
+      if (e.tile) e.tile.style.display = 'none';
     });
-
-    overlay.on('load', function() {
+    radarLayer.once('tileload', function() {
       if (locationCircle) { leafletMap.removeLayer(locationCircle); locationCircle = null; }
       setLegendState(true);
     });
-
-    radarLayer = overlay;
-    overlay.addTo(leafletMap);
-  } catch {
-    if (radarLayer) { leafletMap.removeLayer(radarLayer); radarLayer = null; }
-    showLocationCircle();
+    return;
   }
+
+  // ── Attempt 2: NWS CONUS radar mosaic (always available, no zoom issues) ─
+  const nws = L.imageOverlay(
+    'https://radar.weather.gov/ridge/standard/CONUS_BREF_loop.gif',
+    [[21.652538, -127.620332], [50.506352, -65.986938]],
+    { opacity: 0.7, zIndex: 500 }
+  );
+  nws.on('load', function() {
+    radarLayer = nws;
+    if (locationCircle) { leafletMap.removeLayer(locationCircle); locationCircle = null; }
+    setLegendState(true);
+  });
+  nws.on('error', function() {
+    leafletMap.removeLayer(nws);
+    showLocationCircle();
+  });
+  nws.addTo(leafletMap);
 }
 
 // ── Fetch 40 years of historical daily data for today's calendar date ────────
