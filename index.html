@@ -671,6 +671,26 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
   width: 100%;
   transition: width 120ms ease;
 }
+
+.rc-live-indicator {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.rc-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #02fd02;
+  box-shadow: 0 0 6px #02fd02;
+  animation: livePulse 2s ease infinite;
+}
+@keyframes livePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 </style>
 </head>
 <body>
@@ -832,7 +852,12 @@ const MAP_REFRESH_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT  = 8000;
 const API_BASE       = 'https://api.open-meteo.com/v1/forecast';
 const GEO_BASE       = 'https://nominatim.openstreetmap.org/reverse';
-const IEM_BASE       = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-';
+const IEM_TMS        = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0';
+const RADAR_LIVE_URL = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png';
+const RADAR_FRAMES   = 12;
+const RADAR_STEP_MS  = 5 * 60 * 1000;
+// 1×1 transparent PNG — shown in place of any missing radar tile
+const RADAR_BLANK    = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 const NWS_ALERTS     = 'https://api.weather.gov/alerts/active';
 const HISTORY_API    = 'https://archive-api.open-meteo.com/v1/archive';
 const DAYS           = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
@@ -1097,39 +1122,110 @@ function showLocationCircle() {
   setLegendState(false);
 }
 
-// ── Build 12 UTC-aligned 5-minute-step timestamps for radar frames ────────
-function buildRadarTimestamps() {
-  const now = new Date();
-  now.setUTCSeconds(0, 0);
-  now.setUTCMinutes(Math.floor(now.getUTCMinutes() / 5) * 5);
-  const frames = [];
-  for (let i = 11; i >= 0; i--) {
-    const t = new Date(now.getTime() - i * 5 * 60 * 1000);
-    frames.push(
-      t.getUTCFullYear().toString()
-      + String(t.getUTCMonth() + 1).padStart(2, '0')
-      + String(t.getUTCDate()).padStart(2, '0')
-      + String(t.getUTCHours()).padStart(2, '0')
-      + String(t.getUTCMinutes()).padStart(2, '0')
-    );
-  }
-  return frames;
+// ── UTC helpers ───────────────────────────────────────────────────────────
+function floorTo5(d) {
+  const c = new Date(d);
+  c.setUTCSeconds(0, 0);
+  c.setUTCMinutes(Math.floor(c.getUTCMinutes() / 5) * 5);
+  return c;
+}
+function fmtUTC(d) {
+  return d.getUTCFullYear().toString()
+    + String(d.getUTCMonth() + 1).padStart(2, '0')
+    + String(d.getUTCDate()).padStart(2, '0')
+    + String(d.getUTCHours()).padStart(2, '0')
+    + String(d.getUTCMinutes()).padStart(2, '0');
+}
+function formatTimeLocal(d) {
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
-// ── Format a YYYYMMDDHHMM UTC string to local "3:45 PM" ──────────────────
-function formatFrameTime(ts) {
-  const d = new Date(Date.UTC(
-    +ts.slice(0, 4), +ts.slice(4, 6) - 1, +ts.slice(6, 8),
-    +ts.slice(8, 10), +ts.slice(10, 12)
-  ));
-  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+// ── Convert lon/lat to slippy-map tile X/Y at a zoom ──────────────────────
+function lonLatToTileXY(lon, lat, z) {
+  const n = Math.pow(2, z);
+  const latRad = lat * Math.PI / 180;
+  let x = Math.floor((lon + 180) / 360 * n);
+  let y = Math.floor((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2 * n);
+  x = Math.max(0, Math.min(n - 1, x));
+  y = Math.max(0, Math.min(n - 1, y));
+  return { x, y };
+}
+
+// ── Probe one tile URL template by attempting to load it as an image ──────
+// Resolves true only if the tile genuinely loads (real product exists).
+function probeTileTemplate(tmpl) {
+  return new Promise(resolve => {
+    const z = 7;
+    const { x, y } = lonLatToTileXY(userLon, userLat, z);
+    const url = tmpl.replace('{z}', z).replace('{x}', x).replace('{y}', y);
+    const img = new Image();
+    let done = false;
+    const finish = ok => { if (!done) { done = true; resolve(ok); } };
+    img.onload  = () => finish(img.naturalWidth > 0);
+    img.onerror = () => finish(false);
+    setTimeout(() => finish(false), 4000);
+    img.src = url;
+  });
+}
+
+// ── Probe IEM formats in priority order; return a working frame strategy ──
+// Each strategy yields a tile-URL template + display time for frame i
+// (i = 0 newest … RADAR_FRAMES-1 oldest). Returns null if none work.
+async function selectRadarStrategy() {
+  const base  = floorTo5(new Date());
+  const timeAt = i => new Date(base.getTime() - i * RADAR_STEP_MS);
+
+  // 1) Timestamped national composite. Step back a few frames to clear the
+  //    generation lag on the most-recent boundary, then anchor to it.
+  for (let i = 0; i < 4; i++) {
+    const anchor = timeAt(i);
+    const tmpl = `${IEM_TMS}/nexrad-n0q-900913-${fmtUTC(anchor)}/{z}/{x}/{y}.png`;
+    if (await probeTileTemplate(tmpl)) {
+      return {
+        urlAt:  k => `${IEM_TMS}/nexrad-n0q-900913-${fmtUTC(new Date(anchor.getTime() - k * RADAR_STEP_MS))}/{z}/{x}/{y}.png`,
+        timeAt: k => new Date(anchor.getTime() - k * RADAR_STEP_MS),
+      };
+    }
+  }
+
+  // 2) Relative-index national composite (ridge:: namespace, 0 = newest).
+  if (await probeTileTemplate(`${IEM_TMS}/ridge::USCOMP-N0Q-0/{z}/{x}/{y}.png`)) {
+    return {
+      urlAt:  k => `${IEM_TMS}/ridge::USCOMP-N0Q-${k}/{z}/{x}/{y}.png`,
+      timeAt,
+    };
+  }
+
+  // 3) Single-site radars nearest to the user, relative index.
+  for (const st of ['KNQA', 'KGWX', 'KDGX']) {
+    if (await probeTileTemplate(`${IEM_TMS}/ridge::${st}-N0Q-0/{z}/{x}/{y}.png`)) {
+      return {
+        urlAt:  k => `${IEM_TMS}/ridge::${st}-N0Q-${k}/{z}/{x}/{y}.png`,
+        timeAt,
+      };
+    }
+  }
+
+  return null;
+}
+
+// ── Build ordered frame objects (oldest → newest) from a strategy ─────────
+function buildFrames(strat) {
+  const frames = [];
+  for (let i = RADAR_FRAMES - 1; i >= 0; i--) {
+    frames.push({
+      time:  strat.timeAt(i),
+      layer: L.tileLayer(strat.urlAt(i), { opacity: 0.75, zIndex: 500, errorTileUrl: RADAR_BLANK }),
+    });
+  }
+  return frames;
 }
 
 // ── Update the radar controls UI to reflect current frame ─────────────────
 function updateRadarUI() {
   if (!radarFrames.length) return;
   const isLive = radarFrameIdx === radarFrames.length - 1;
-  document.getElementById('rcTimestamp').textContent = formatFrameTime(radarFrames[radarFrameIdx].ts);
+  document.getElementById('rcTimestamp').textContent = formatTimeLocal(radarFrames[radarFrameIdx].time);
   document.getElementById('rcPlay').textContent = radarPlaying ? '⏸' : '▶';
   const liveBtn = document.getElementById('rcLive');
   liveBtn.textContent = 'Live';
@@ -1152,7 +1248,7 @@ function goToFrame(idx) {
 
 // ── Start animation playback ──────────────────────────────────────────────
 function playRadar() {
-  if (radarPlaying) return;
+  if (radarPlaying || !radarFrames.length) return;
   radarPlaying = true;
   radarTimer = setInterval(() => {
     goToFrame((radarFrameIdx + 1) % radarFrames.length);
@@ -1168,43 +1264,80 @@ function pauseRadar() {
   updateRadarUI();
 }
 
-// ── Build frame objects and show the most recent one ─────────────────────
-function initRadarLoop() {
-  const tss = buildRadarTimestamps();
-  radarFrames = tss.map(ts => ({
-    ts,
-    layer: L.tileLayer(`${IEM_BASE}${ts}/{z}/{x}/{y}.png`, { opacity: 0.75, zIndex: 500 }),
-  }));
-  radarFrameIdx = radarFrames.length - 1;
-  radarLayer = radarFrames[radarFrameIdx].layer;
-  radarLayer.addTo(leafletMap);
-  setLegendState(true);
-  updateRadarUI();
-
-  leafletMap.on('movestart zoomstart', () => {
-    if (radarPlaying) {
-      pauseRadar();
-      clearTimeout(radarResume);
-      radarResume = setTimeout(playRadar, 2000);
-    }
-  });
+// ── Auto-pause playback while the user interacts with the map ─────────────
+function onRadarMapInteract() {
+  if (radarPlaying) {
+    pauseRadar();
+    clearTimeout(radarResume);
+    radarResume = setTimeout(playRadar, 2000);
+  }
+}
+function enableRadarAutoPause() {
+  leafletMap.off('movestart zoomstart', onRadarMapInteract);
+  leafletMap.on('movestart zoomstart', onRadarMapInteract);
 }
 
-// ── Rebuild frame set every 5 minutes ────────────────────────────────────
-function refreshRadarOverlay() {
-  if (!leafletMap || !radarFrames.length) return;
-  const wasPlaying = radarPlaying;
-  const wasLive    = radarFrameIdx === radarFrames.length - 1;
+// ── Restore the playback control bar markup and wire its buttons ──────────
+function showRadarControls() {
+  const rc = document.getElementById('radarControls');
+  if (!rc) return;
+  rc.innerHTML = RADAR_CONTROLS_HTML;
+  bindRadarControls();
+}
+
+// ── Ultimate fallback: confirmed always-live composite, no animation ──────
+function degradeToLiveRadar() {
+  radarFrames = [];
+  radarPlaying = false;
+  clearInterval(radarTimer);
+  radarTimer = null;
+  if (radarLayer) leafletMap.removeLayer(radarLayer);
+  radarLayer = L.tileLayer(RADAR_LIVE_URL, { opacity: 0.75, zIndex: 500, errorTileUrl: RADAR_BLANK }).addTo(leafletMap);
+  setLegendState(true);
+  const rc = document.getElementById('radarControls');
+  if (rc) rc.innerHTML = '<div class="rc-live-indicator"><span class="rc-live-dot"></span>Live Radar</div>';
+}
+
+// ── Probe + build the loop, or degrade to the live tile ───────────────────
+async function initRadarLoop() {
+  const strat = await selectRadarStrategy();
+  if (!strat) {
+    console.info('[radar] no time-stepped product available — falling back to live composite:',
+      RADAR_LIVE_URL);
+    degradeToLiveRadar();
+    return;
+  }
+  // Diagnostic: log the resolved frame-0 tile URL so it can be tested directly.
+  const { x, y } = lonLatToTileXY(userLon, userLat, 7);
+  console.info('[radar] animated loop active — frame-0 tile:',
+    strat.urlAt(0).replace('{z}', 7).replace('{x}', x).replace('{y}', y));
+  radarFrames   = buildFrames(strat);
+  radarFrameIdx = radarFrames.length - 1;
+  radarLayer    = radarFrames[radarFrameIdx].layer.addTo(leafletMap);
+  showRadarControls();
+  setLegendState(true);
+  updateRadarUI();
+  enableRadarAutoPause();
+}
+
+// ── Rebuild frame set every 5 minutes, preserving play/live state ─────────
+async function refreshRadarOverlay() {
+  if (!leafletMap) return;
+  const strat = await selectRadarStrategy();
+  if (!strat) { if (radarPlaying) pauseRadar(); degradeToLiveRadar(); return; }
+
+  const wasPlaying  = radarPlaying;
+  const wasLive     = !radarFrames.length || radarFrameIdx === radarFrames.length - 1;
+  const cameFromLive = !radarFrames.length;
   if (wasPlaying) pauseRadar();
   if (radarLayer) leafletMap.removeLayer(radarLayer);
-  const tss = buildRadarTimestamps();
-  radarFrames = tss.map(ts => ({
-    ts,
-    layer: L.tileLayer(`${IEM_BASE}${ts}/{z}/{x}/{y}.png`, { opacity: 0.75, zIndex: 500 }),
-  }));
-  radarFrameIdx = wasLive ? radarFrames.length - 1 : Math.min(radarFrameIdx, radarFrames.length - 1);
-  radarLayer = radarFrames[radarFrameIdx].layer;
-  radarLayer.addTo(leafletMap);
+
+  radarFrames = buildFrames(strat);
+  if (cameFromLive) { showRadarControls(); enableRadarAutoPause(); }
+  radarFrameIdx = wasLive
+    ? radarFrames.length - 1
+    : Math.min(radarFrameIdx, radarFrames.length - 1);
+  radarLayer = radarFrames[radarFrameIdx].layer.addTo(leafletMap);
   updateRadarUI();
   if (wasPlaying) playRadar();
 }
@@ -1525,29 +1658,46 @@ document.getElementById('alertContainer').addEventListener('click', e => {
   }
 });
 
-// Radar control handlers
-document.getElementById('rcPrev').addEventListener('click', () => {
-  pauseRadar();
-  if (radarFrames.length) goToFrame((radarFrameIdx - 1 + radarFrames.length) % radarFrames.length);
-});
-document.getElementById('rcPlay').addEventListener('click', () => {
-  if (radarPlaying) pauseRadar(); else playRadar();
-});
-document.getElementById('rcNext').addEventListener('click', () => {
-  pauseRadar();
-  if (radarFrames.length) goToFrame((radarFrameIdx + 1) % radarFrames.length);
-});
-document.getElementById('rcLive').addEventListener('click', () => {
-  pauseRadar();
-  if (radarFrames.length) goToFrame(radarFrames.length - 1);
-});
-document.getElementById('rcTimeline').addEventListener('click', e => {
-  if (!radarFrames.length) return;
-  pauseRadar();
-  const rect  = e.currentTarget.getBoundingClientRect();
-  const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-  goToFrame(Math.round(ratio * (radarFrames.length - 1)));
-});
+// Radar control bar markup (restored after any degrade/upgrade transition)
+const RADAR_CONTROLS_HTML = `
+  <div class="rc-top">
+    <span class="rc-timestamp" id="rcTimestamp">—</span>
+    <button class="rc-live-btn" id="rcLive">Live</button>
+  </div>
+  <div class="rc-row">
+    <button class="rc-btn" id="rcPrev" title="Previous frame">◀</button>
+    <button class="rc-btn" id="rcPlay" title="Play">▶</button>
+    <button class="rc-btn" id="rcNext" title="Next frame">▶</button>
+    <div class="rc-timeline" id="rcTimeline">
+      <div class="rc-fill" id="rcFill"></div>
+    </div>
+  </div>`;
+
+// Wire the playback control buttons to the loop
+function bindRadarControls() {
+  document.getElementById('rcPrev').addEventListener('click', () => {
+    pauseRadar();
+    if (radarFrames.length) goToFrame((radarFrameIdx - 1 + radarFrames.length) % radarFrames.length);
+  });
+  document.getElementById('rcPlay').addEventListener('click', () => {
+    if (radarPlaying) pauseRadar(); else playRadar();
+  });
+  document.getElementById('rcNext').addEventListener('click', () => {
+    pauseRadar();
+    if (radarFrames.length) goToFrame((radarFrameIdx + 1) % radarFrames.length);
+  });
+  document.getElementById('rcLive').addEventListener('click', () => {
+    pauseRadar();
+    if (radarFrames.length) goToFrame(radarFrames.length - 1);
+  });
+  document.getElementById('rcTimeline').addEventListener('click', e => {
+    if (!radarFrames.length) return;
+    pauseRadar();
+    const rect  = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    goToFrame(Math.round(ratio * (radarFrames.length - 1)));
+  });
+}
 
 loadWeather();
 setInterval(loadWeather, REFRESH_MS);
