@@ -840,6 +840,7 @@ let radarFrames     = [];
 let radarFrameIdx   = 0;
 let radarPlaying    = false;
 let radarTimer      = null;
+let radarHoldTimer  = null;
 let radarResume     = null;
 // Alerts
 let seenAlerts      = new Set();
@@ -855,7 +856,10 @@ const GEO_BASE       = 'https://nominatim.openstreetmap.org/reverse';
 const IEM_TMS        = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0';
 const RADAR_LIVE_URL = 'https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png';
 const RADAR_FRAMES   = 12;
-const RADAR_STEP_MS  = 5 * 60 * 1000;
+const RADAR_STEP_MS  = 6 * 60 * 1000;   // IEM-fallback frame spacing (66 min / 12 frames)
+const RADAR_FRAME_MS = 600;             // playback dwell per frame
+const RADAR_HOLD_MS  = 1200;            // extra pause on the newest frame before looping
+const RADAR_OPACITY  = 0.85;            // per-frame tile opacity
 // 1×1 transparent PNG — shown in place of any missing radar tile
 const RADAR_BLANK    = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 const NWS_ALERTS     = 'https://api.weather.gov/alerts/active';
@@ -1182,6 +1186,7 @@ async function fetchRainViewerStrategy() {
     const tmpl   = `${host}${latest.path}/256/{z}/{x}/{y}/2/1_1.png`;
     if (!(await probeTileTemplate(tmpl))) return null;
     return {
+      count: frames.length,
       urlAt:  k => {
         const f = frames[frames.length - 1 - k];
         return f ? `${host}${f.path}/256/{z}/{x}/{y}/2/1_1.png` : tmpl;
@@ -1242,12 +1247,18 @@ async function selectRadarStrategy() {
 }
 
 // ── Build ordered frame objects (oldest → newest) from a strategy ─────────
+// Each frame gets a distinct `_f=<n>` cache-buster so Leaflet's internal tile
+// cache treats it as a separate request — swapping layers swaps real pixels,
+// never a re-served cached tile from a neighbouring frame.
 function buildFrames(strat) {
   const frames = [];
-  for (let i = RADAR_FRAMES - 1; i >= 0; i--) {
+  const n = strat.count ?? RADAR_FRAMES;
+  for (let i = n - 1; i >= 0; i--) {
+    const tmpl = strat.urlAt(i);
+    const url  = tmpl + (tmpl.includes('?') ? '&' : '?') + '_f=' + i;
     frames.push({
       time:  strat.timeAt(i),
-      layer: L.tileLayer(strat.urlAt(i), { opacity: 0.75, zIndex: 500, errorTileUrl: RADAR_BLANK }),
+      layer: L.tileLayer(url, { opacity: RADAR_OPACITY, zIndex: 500, errorTileUrl: RADAR_BLANK }),
     });
   }
   return frames;
@@ -1269,22 +1280,62 @@ function updateRadarUI() {
 }
 
 // ── Switch to a specific frame index ─────────────────────────────────────
+// Belt-and-suspenders: strip every frame layer off the map first, then add
+// only the target. Guarantees exactly one radar layer is ever visible and
+// that it is opaque (a frame may still be at opacity 0 from pre-warming).
 function goToFrame(idx) {
   if (!radarFrames.length || !leafletMap) return;
-  if (radarLayer) leafletMap.removeLayer(radarLayer);
+  radarFrames.forEach(f => { if (leafletMap.hasLayer(f.layer)) leafletMap.removeLayer(f.layer); });
   radarFrameIdx = idx;
   radarLayer = radarFrames[idx].layer;
+  radarLayer.setOpacity(RADAR_OPACITY);
   radarLayer.addTo(leafletMap);
   updateRadarUI();
 }
 
+// ── Pre-warm every frame's tiles so advancing never flashes/blanks ────────
+// Add each non-visible frame at opacity 0 to kick off its tile requests, then
+// strip them back off once the browser has had time to fetch and cache them.
+function preloadRadarFrames() {
+  if (!leafletMap || radarFrames.length < 2) return;
+  radarFrames.forEach((f, i) => {
+    if (i === radarFrameIdx) return;
+    f.layer.setOpacity(0);
+    f.layer.addTo(leafletMap);
+  });
+  setTimeout(() => {
+    radarFrames.forEach((f, i) => {
+      if (i === radarFrameIdx) return;
+      if (leafletMap.hasLayer(f.layer)) leafletMap.removeLayer(f.layer);
+      f.layer.setOpacity(RADAR_OPACITY);
+    });
+  }, 2000);
+}
+
+// ── Advance one frame; hold longer on the newest frame before looping ─────
+function stepRadar() {
+  const next = (radarFrameIdx + 1) % radarFrames.length;
+  goToFrame(next);
+  if (next === radarFrames.length - 1) {
+    // Reached the live frame — pause the cadence for a beat so the current
+    // conditions register, then resume the loop from the oldest frame.
+    clearInterval(radarTimer);
+    radarTimer = null;
+    radarHoldTimer = setTimeout(() => {
+      radarHoldTimer = null;
+      if (radarPlaying) radarTimer = setInterval(stepRadar, RADAR_FRAME_MS);
+    }, RADAR_HOLD_MS);
+  }
+}
+
 // ── Start animation playback ──────────────────────────────────────────────
 function playRadar() {
-  if (radarPlaying || !radarFrames.length) return;
+  if (radarPlaying || radarFrames.length < 2) return;
   radarPlaying = true;
-  radarTimer = setInterval(() => {
-    goToFrame((radarFrameIdx + 1) % radarFrames.length);
-  }, 500);
+  clearInterval(radarTimer);
+  clearTimeout(radarHoldTimer);
+  radarHoldTimer = null;
+  radarTimer = setInterval(stepRadar, RADAR_FRAME_MS);
   updateRadarUI();
 }
 
@@ -1293,6 +1344,8 @@ function pauseRadar() {
   radarPlaying = false;
   clearInterval(radarTimer);
   radarTimer = null;
+  clearTimeout(radarHoldTimer);
+  radarHoldTimer = null;
   updateRadarUI();
 }
 
@@ -1323,8 +1376,10 @@ function degradeToLiveRadar() {
   radarPlaying = false;
   clearInterval(radarTimer);
   radarTimer = null;
+  clearTimeout(radarHoldTimer);
+  radarHoldTimer = null;
   if (radarLayer) leafletMap.removeLayer(radarLayer);
-  radarLayer = L.tileLayer(RADAR_LIVE_URL, { opacity: 0.75, zIndex: 500, errorTileUrl: RADAR_BLANK }).addTo(leafletMap);
+  radarLayer = L.tileLayer(RADAR_LIVE_URL, { opacity: RADAR_OPACITY, zIndex: 500, errorTileUrl: RADAR_BLANK }).addTo(leafletMap);
   setLegendState(true);
   const rc = document.getElementById('radarControls');
   if (rc) rc.innerHTML = '<div class="rc-live-indicator"><span class="rc-live-dot"></span>Live Radar</div>';
@@ -1341,6 +1396,7 @@ async function initRadarLoop() {
   setLegendState(true);
   updateRadarUI();
   enableRadarAutoPause();
+  setTimeout(preloadRadarFrames, 1000);
 }
 
 // ── Rebuild frame set every 5 minutes, preserving play/live state ─────────
@@ -1353,7 +1409,8 @@ async function refreshRadarOverlay() {
   const wasLive     = !radarFrames.length || radarFrameIdx === radarFrames.length - 1;
   const cameFromLive = !radarFrames.length;
   if (wasPlaying) pauseRadar();
-  if (radarLayer) leafletMap.removeLayer(radarLayer);
+  // Strip every layer from the outgoing frame set (any may linger from pre-warm).
+  radarFrames.forEach(f => { if (leafletMap.hasLayer(f.layer)) leafletMap.removeLayer(f.layer); });
 
   radarFrames = buildFrames(strat);
   if (cameFromLive) { showRadarControls(); enableRadarAutoPause(); }
@@ -1362,6 +1419,7 @@ async function refreshRadarOverlay() {
     : Math.min(radarFrameIdx, radarFrames.length - 1);
   radarLayer = radarFrames[radarFrameIdx].layer.addTo(leafletMap);
   updateRadarUI();
+  setTimeout(preloadRadarFrames, 1000);
   if (wasPlaying) playRadar();
 }
 
