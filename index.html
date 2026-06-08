@@ -501,11 +501,17 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
   -webkit-backdrop-filter: none;
 }
 
-.alert-banner .alert-event        { color: #f0ede8; font-weight: 600; }
-.alert-banner .alert-headline     { color: #c4bfb8; }
-.alert-banner .alert-details-text { color: #c4bfb8; }
-.alert-banner .alert-expires      { color: #f5a623; font-weight: 600; }
-.alert-banner .alert-icon         { color: #f0ede8; }
+.alert-banner,
+.alert-banner .alert-event,
+.alert-banner .alert-headline,
+.alert-banner .alert-details-text,
+.alert-banner .alert-expires,
+.alert-banner .alert-icon,
+.alert-banner .alert-btn-details,
+.alert-banner .alert-btn-dismiss  { color: #ffffff; }
+
+.alert-banner .alert-event        { font-weight: 600; }
+.alert-banner .alert-expires      { font-weight: 600; }
 
 @keyframes slideDown {
   from { opacity: 0; transform: translateY(-12px); }
