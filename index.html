@@ -29,6 +29,7 @@ body {
   font-family: 'DM Sans', sans-serif;
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   padding: 24px;
@@ -605,7 +606,8 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
 <body>
 
 <!-- Alert banners — fixed overlay, zero layout shift when empty -->
-<div id="alertsContainer" style="position:fixed;top:16px;left:50%;transform:translateX(-50%);width:min(420px,calc(100% - 32px));z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;"></div>
+<div id="alertsContainer" style="width:100%;max-width:420px;display:flex;flex-direction:column;gap:8px;margin-bottom:12px;"></div>
+<style>#alertsContainer:empty { margin-bottom: 0; }</style>
 
 <!-- Skeleton loader -->
 <div class="skeleton active" id="skeleton">
