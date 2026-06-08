@@ -27,14 +27,29 @@ body {
   background: var(--bg);
   color: var(--text-primary);
   font-family: 'DM Sans', sans-serif;
-  min-height: 100vh;
+  display: block;
+  transition: background 0.4s ease;
+}
+
+#appWrapper {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  min-height: 100vh;
   padding: 24px;
-  transition: background 0.4s ease;
+  width: 100%;
+  box-sizing: border-box;
 }
+
+#alertsContainer {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#alertsContainer:empty { display: none; }
 
 body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
 
@@ -605,9 +620,10 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
 </head>
 <body>
 
-<!-- Alert banners — fixed overlay, zero layout shift when empty -->
-<div id="alertsContainer" style="width:100%;max-width:420px;display:flex;flex-direction:column;gap:8px;margin-bottom:12px;"></div>
-<style>#alertsContainer:empty { margin-bottom: 0; }</style>
+<div id="appWrapper">
+
+<!-- Alert banners -->
+<div id="alertsContainer"></div>
 
 <!-- Skeleton loader -->
 <div class="skeleton active" id="skeleton">
@@ -721,6 +737,8 @@ body.night { --bg: #090b0f; --accent: #7eb8f7; background: var(--bg); }
   <div class="error-msg" id="errorMsg">Unable to load weather data.</div>
   <button class="error-retry" id="retryBtn">Try again</button>
 </div>
+
+</div><!-- #appWrapper -->
 
 <script>
 // ── Module state ──────────────────────────────────────────────────────────
